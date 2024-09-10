@@ -35,6 +35,253 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from PIL import ImageDraw, ImageFont, ImageSequence, Image
 
+# Import necessary libraries for FastAPI, authentication, and database
+from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from sqlalchemy import create_engine, Column, String, Integer
+from sqlalchemy.orm import declarative_base, sessionmaker
+from passlib.context import CryptContext
+from jose import JWTError, jwt
+import uvicorn
+
+# JWT Secret Key and algorithm
+SECRET_KEY = "a_random_secret_key"
+ALGORITHM = "HS256"
+
+# Password hashing context
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# OAuth2 scheme
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+# FastAPI app instance
+app = FastAPI()
+
+# Database setup
+SQLALCHEMY_DATABASE_URL = "sqlite:///./users.db"
+engine = create_engine(SQLALCHEMY_DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+# User Model
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True)
+    email = Column(String, unique=True, index=True)
+    hashed_password = Column(String)
+
+# Create database tables
+Base.metadata.create_all(bind=engine)
+
+# Dependency to get the database session
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# Utility function to hash passwords
+def hash_password(password: str):
+    return pwd_context.hash(password)
+
+# Utility function to verify password
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+# Utility function to create JWT token
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    token = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return token
+
+# Signup route
+@app.post("/signup/")
+def signup(username: str, email: str, password: str, db: SessionLocal = Depends(get_db)):
+    hashed_password = hash_password(password)
+    new_user = User(username=username, email=email, hashed_password=hashed_password)
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return {"message": "User created successfully"}
+
+# Login route to generate token
+@app.post("/login/")
+def login(form_data: OAuth2PasswordRequestForm = Depends(), db: SessionLocal = Depends(get_db)):
+    user = db.query(User).filter(User.username == form_data.username).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Incorrect username or password")
+    if not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(status_code=400, detail="Incorrect username or password")
+    
+    access_token = create_access_token(data={"sub": user.username})
+    return {"access_token": access_token, "token_type": "bearer"}
+
+# Protected route to verify the token
+@app.get("/users/me/")
+def read_users_me(token: str = Depends(oauth2_scheme), db: SessionLocal = Depends(get_db)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user = db.query(User).filter(User.username == username).first()
+    return user
+
+# Import necessary libraries
+import streamlit as st
+import stripe
+from fastapi import FastAPI, Depends, HTTPException
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from jose import jwt, JWTError
+from passlib.context import CryptContext
+from sqlalchemy import create_engine, Column, String, Integer
+from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.exc import IntegrityError
+
+# Stripe API setup
+stripe.api_key = "your_stripe_secret_key"  # Add your Stripe secret key here
+
+# JWT Secret Key and algorithm
+SECRET_KEY = "a_random_secret_key"
+ALGORITHM = "HS256"
+
+# Password hashing context
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# FastAPI app instance
+app = FastAPI()
+
+# Database setup
+SQLALCHEMY_DATABASE_URL = "sqlite:///./users.db"
+engine = create_engine(SQLALCHEMY_DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+# User Model
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True)
+    email = Column(String, unique=True, index=True)
+    hashed_password = Column(String)
+    subscription_status = Column(String, default="free")  # Free or paid
+
+# Create database tables
+Base.metadata.create_all(bind=engine)
+
+# Utility functions for hashing password and JWT
+def hash_password(password: str):
+    return pwd_context.hash(password)
+
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def create_access_token(data: dict):
+    return jwt.encode(data, SECRET_KEY, algorithm=ALGORITHM)
+
+# Dependency to get the database session
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# Signup Route
+@app.post("/signup/")
+def signup(username: str, email: str, password: str, db: SessionLocal = Depends(get_db)):
+    hashed_password = hash_password(password)
+    new_user = User(username=username, email=email, hashed_password=hashed_password)
+    try:
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+    except IntegrityError:
+        raise HTTPException(status_code=400, detail="Username or email already exists")
+    return {"message": "User created successfully"}
+
+# Login Route
+@app.post("/login/")
+def login(form_data: OAuth2PasswordRequestForm = Depends(), db: SessionLocal = Depends(get_db)):
+    user = db.query(User).filter(User.username == form_data.username).first()
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(status_code=400, detail="Incorrect username or password")
+    access_token = create_access_token(data={"sub": user.username})
+    return {"access_token": access_token, "token_type": "bearer"}
+
+# Subscription management
+@app.post("/subscribe/")
+def subscribe(token: str = Depends(OAuth2PasswordBearer(tokenUrl="token")), db: SessionLocal = Depends(get_db)):
+    payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    username = payload.get("sub")
+    user = db.query(User).filter(User.username == username).first()
+
+    if not user:
+        raise HTTPException(status_code=400, detail="User not found")
+
+    # Stripe Checkout Session for subscription payment
+    checkout_session = stripe.checkout.Session.create(
+        payment_method_types=['card'],
+        line_items=[{
+            'price': 'price_your_stripe_price_id',  # Replace with your Stripe price ID
+            'quantity': 1,
+        }],
+        mode='subscription',
+        success_url='http://localhost:8501/success',
+        cancel_url='http://localhost:8501/cancel',
+    )
+    return {"checkout_url": checkout_session.url}
+
+# Streamlit Frontend (UI)
+def main():
+    st.title("Video to GIF Tool with Subscription")
+
+    # Page navigation
+    page = st.sidebar.selectbox("Choose an option", ["Login", "Signup", "Subscription"])
+
+    if page == "Signup":
+        st.subheader("Signup")
+        username = st.text_input("Username")
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+        if st.button("Sign Up"):
+            response = signup(username, email, password)
+            st.success(response["message"])
+
+    elif page == "Login":
+        st.subheader("Login")
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        if st.button("Login"):
+            form_data = OAuth2PasswordRequestForm(username=username, password=password)
+            try:
+                response = login(form_data)
+                st.success("Login Successful!")
+                st.session_state['access_token'] = response['access_token']
+            except HTTPException as e:
+                st.error(e.detail)
+
+    elif page == "Subscription":
+        st.subheader("Subscription")
+        if 'access_token' in st.session_state:
+            if st.button("Subscribe"):
+                response = subscribe(st.session_state['access_token'])
+                st.markdown(f"[Proceed to Payment]({response['checkout_url']})")
+        else:
+            st.warning("Please log in to manage your subscription.")
+
+if __name__ == "__main__":
+    # Launch Streamlit
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+    main()
+
+
+
+
 load_dotenv()
 
 # st.title("Welcome to Video To Gif Generator!")
